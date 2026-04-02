@@ -696,6 +696,9 @@ class RiseFallBot:
 
         self._stop = False
 
+        # Prevents concurrent _evaluate() calls during async I/O gaps
+        self._evaluating: bool = False
+
         # Circuit breaker
         self._cb_paused_until: float = 0.0
 
@@ -711,6 +714,7 @@ class RiseFallBot:
         self.waiting_for_result = False
         self.current_contract   = None
         self.lock_since         = None
+        self._evaluating        = False
 
     def _check_lock_timeout(self):
         if not self.waiting_for_result or self.lock_since is None:
@@ -775,7 +779,7 @@ class RiseFallBot:
             print(f"\r  #{self.tick_count}  p={price:.5f}  {status}{warmup}  {_ts()}",
                   end="", flush=True)
 
-        if not self.waiting_for_result and self.signal.is_ready():
+        if not self.waiting_for_result and not self._evaluating and self.signal.is_ready():
             if (self.tick_count - self.last_eval_tick) >= self.cfg["eval_every_ticks"]:
                 self.last_eval_tick = self.tick_count
                 print()
@@ -784,6 +788,16 @@ class RiseFallBot:
     # ── Signal evaluation and trade placement ─────────────────────────────────
 
     async def _evaluate(self):
+        if self.waiting_for_result or self._evaluating:
+            return
+
+        self._evaluating = True
+        try:
+            await self._evaluate_inner()
+        finally:
+            self._evaluating = False
+
+    async def _evaluate_inner(self):
         if self.waiting_for_result:
             return
 
